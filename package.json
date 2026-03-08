@@ -12,7 +12,7 @@
     "db:empty": "tsx script/empty-database.ts"
   },
   "dependencies": {
-    "@google-cloud/storage": "^7.12.0",
+    "@google-cloud/storage": "^5.18.3",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@radix-ui/react-accordion": "^1.2.4",
