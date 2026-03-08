@@ -1,7 +1,6 @@
 import express, { type Express } from "express";
 import path from "path";
 import fs from "fs";
-import { randomUUID } from "crypto";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import { storage } from "./storage";
@@ -9,6 +8,7 @@ import { insertProductSchema, insertClientSchema, insertCategorySchema } from "@
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
+import { uploadToSupabaseStorage, isSupabaseStorageConfigured } from "./supabaseStorage";
 
 const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
@@ -16,13 +16,7 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadsDir),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname) || ".jpg";
-      cb(null, `${randomUUID()}${ext}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
@@ -71,14 +65,30 @@ export async function registerRoutes(
   // Register object storage routes for image uploads
   registerObjectStorageRoutes(app);
 
-  // Local file upload fallback (when PRIVATE_OBJECT_DIR is not set) and static serving
+  // Static serving for legacy /uploads/ paths (e.g. old product images before Supabase)
   app.use("/uploads", express.static(uploadsDir));
-  app.post("/api/uploads", upload.single("file"), (req, res) => {
+
+  // Upload to Supabase Storage (product images); returns public URL as objectPath
+  app.post("/api/uploads", upload.single("file"), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
+    if (!isSupabaseStorageConfigured()) {
+      return res.status(503).json({
+        error: "Supabase Storage not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.",
+      });
+    }
+    const buffer = req.file.buffer;
+    const result = await uploadToSupabaseStorage(
+      buffer,
+      req.file.originalname,
+      req.file.mimetype
+    );
+    if (!result) {
+      return res.status(500).json({ error: "Failed to upload to Supabase Storage" });
+    }
     res.json({
-      objectPath: `/uploads/${req.file.filename}`,
+      objectPath: result.publicUrl,
       metadata: {
         name: req.file.originalname,
         size: req.file.size,
