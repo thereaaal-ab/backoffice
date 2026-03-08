@@ -4,11 +4,12 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "PORT=3002 NODE_ENV=development tsx server/index.ts",
+    "dev": "PORT=3002 NODE_ENV=development node --env-file=.env --import=tsx/esm server/index.ts",
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "db:empty": "tsx script/empty-database.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.12.0",

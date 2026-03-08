@@ -24,6 +24,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Package, Minus, Search, ImageIcon, Filter, Upload, X, Loader2, MoreVertical, Pencil, Trash2, FolderPlus } from "lucide-react";
+import { PageBanner } from "@/components/page-banner";
 import type { ProductWithVariants } from "@shared/schema";
 import { productColorOptions, mainCategoryEnum } from "@shared/schema";
 import { useForm } from "react-hook-form";
@@ -401,6 +402,11 @@ export default function Stock() {
 
   return (
     <div className="space-y-6">
+      <PageBanner
+        breadcrumb="Backoffice"
+        title="Catalogue produits"
+        subtitle="Gérez vos produits et votre inventaire"
+      />
       <input
         ref={fileInputRef}
         type="file"
@@ -410,8 +416,8 @@ export default function Stock() {
         data-testid="input-file-upload"
         aria-hidden
       />
-      {/* Sticky header: search + Ajouter always visible */}
-      <div className="sticky top-0 z-10 -mx-4 -mt-4 px-4 pt-4 pb-3 mb-1 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
+      {/* Sticky search + actions bar */}
+      <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 pt-1 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/90 border-b border-border/50">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
           <div className="relative flex-1 w-full min-w-0 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
@@ -726,7 +732,7 @@ export default function Stock() {
 
       {/* Content: sidebar filters + main grid */}
       <div className="flex flex-col lg:flex-row gap-6">
-        <aside className="w-full lg:w-56 shrink-0 space-y-4 p-4 rounded-lg border bg-card h-fit">
+        <aside className="w-full lg:w-56 shrink-0 space-y-4 p-4 rounded-xl border border-gold/20 bg-card h-fit">
           <div>
             <Label className="text-sm font-medium mb-2 block">Catégorie</Label>
             <Select value={selectedCategory} onValueChange={setSelectedCategory} data-testid="select-filter-category">
@@ -1077,17 +1083,23 @@ export default function Stock() {
                       </DropdownMenu>
                     </div>
                   </div>
-                  {/* Body: title + description + Détails */}
-                  <CardContent className="flex flex-1 flex-col p-5">
-                    <h3 className="font-semibold text-lg leading-tight">{product.name}</h3>
-                    <p className="text-sm text-muted-foreground mt-2 flex-1">
-                      {Number(product.defaultPrice).toFixed(2)} € · {product.totalStock} en stock
-                    </p>
-                    <div className="flex justify-end mt-4 pt-2">
+                  {/* Body: title + price + stock + details */}
+                  <CardContent className="flex flex-1 flex-col p-4">
+                    <h3 className="font-display font-medium text-base leading-tight">{product.name}</h3>
+                    <div className="mt-2 flex-1 flex items-baseline justify-between gap-2">
+                      <span className="text-lg font-semibold text-primary">
+                        {Number(product.defaultPrice).toFixed(2)} €
+                      </span>
+                      <span className="text-xs text-muted-foreground">{product.totalStock} en stock</span>
+                    </div>
+                    <div className="mt-3 h-px w-8 bg-gold/40" />
+                    <div className="flex justify-end mt-3">
                       <Button
+                        variant="outline"
+                        size="sm"
                         onClick={() => setDetailProduct(product)}
                         data-testid={`details-product-${product.id}`}
-                        className="shrink-0"
+                        className="text-xs tracking-wide hover:border-primary hover:text-primary"
                       >
                         Détails
                       </Button>

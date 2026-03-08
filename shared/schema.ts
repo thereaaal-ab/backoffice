@@ -267,3 +267,17 @@ export type ClientWithStats = Client & {
   totalSpent: number;
   purchaseCount: number;
 };
+
+/** A "virtual client" derived from storefront orders, grouped by identity (phone > email > name). */
+export type StorefrontClientSummary = {
+  id: string;           // synthetic key: "sc_{phone|email|name}"
+  name: string;
+  phone: string | null;
+  email: string | null;
+  source: "storefront";
+  orderCount: number;
+  totalSpent: number;
+  paidAmount: number;
+  toCollect: number;
+  orders: Order[];
+};

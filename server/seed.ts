@@ -12,6 +12,10 @@ const defaultCategories = [
 ];
 
 export async function seedDatabase() {
+  if (!db) {
+    console.log("⚠️  Seed skipped — no database connection.");
+    return;
+  }
   try {
     // Always ensure default categories exist
     const existingCategories = await db.select().from(productCategories);

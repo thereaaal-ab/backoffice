@@ -44,22 +44,23 @@ function AppLayout() {
   const pageTitle = pageTitles[location] || "StockPro";
 
   return (
-    <div className="flex flex-col h-dvh h-screen w-full bg-muted/30 min-h-0">
-      <header className="flex h-14 min-h-[3.5rem] items-center justify-between gap-3 border-b bg-background px-4 shrink-0">
+    <div className="flex flex-col h-dvh h-screen w-full min-h-0 bg-gradient-to-b from-[#fdfaf7] to-white dark:from-background dark:to-background">
+      <header className="flex h-14 min-h-[3.5rem] items-center justify-between gap-3 bg-background/90 backdrop-blur-sm px-4 sm:px-6 shrink-0 border-b border-gold/20">
         <div className="flex items-center gap-3 min-w-0">
           <Link href="/" className="flex items-center gap-2 shrink-0">
-            <div className="h-8 w-8 flex items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <div className="h-8 w-8 flex items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
               <Package className="h-4 w-4" />
             </div>
-            <span className="font-semibold text-base hidden sm:inline">StockPro</span>
+            <span className="font-display font-medium text-base hidden sm:inline tracking-wide">StockPro</span>
           </Link>
-          <h1 className="text-base sm:text-lg font-semibold truncate">{pageTitle}</h1>
+          <span className="text-muted-foreground/40 hidden sm:inline text-sm">›</span>
+          <span className="text-sm font-medium text-muted-foreground truncate">{pageTitle}</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <ThemeToggle />
         </div>
       </header>
-      <main className="flex-1 overflow-auto min-h-0 pb-20">
+      <main className="flex-1 overflow-auto min-h-0 pb-24">
         <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full">
           <Router />
         </div>

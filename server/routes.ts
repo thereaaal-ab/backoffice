@@ -316,6 +316,28 @@ export async function registerRoutes(
     }
   });
 
+  // Backoffice client sales history
+  app.get("/api/clients/:id/sales", async (req, res) => {
+    try {
+      const clientSales = await storage.getClientSales(req.params.id);
+      res.json(clientSales);
+    } catch (error) {
+      console.error("Error fetching client sales:", error);
+      res.status(500).json({ error: "Failed to fetch client sales" });
+    }
+  });
+
+  // Storefront clients (derived from orders, grouped by identity)
+  app.get("/api/storefront-clients", async (req, res) => {
+    try {
+      const sfClients = await storage.getStorefrontClients();
+      res.json(sfClients);
+    } catch (error) {
+      console.error("Error fetching storefront clients:", error);
+      res.status(500).json({ error: "Failed to fetch storefront clients" });
+    }
+  });
+
   // Sales
   app.get("/api/sales", async (req, res) => {
     try {
@@ -474,11 +496,37 @@ export async function registerRoutes(
     }
   });
 
+  // Normalize order row from DB (pg may return snake_case) to camelCase for frontend
+  function normalizeOrderRow(row: Record<string, unknown>) {
+    return {
+      id: row.id,
+      firstName: row.firstName ?? row.first_name,
+      phone: row.phone,
+      email: row.email,
+      totalAmount: row.totalAmount ?? row.total_amount ?? "0",
+      paidAmount: row.paidAmount ?? row.paid_amount ?? "0",
+      paymentStatus: row.paymentStatus ?? row.payment_status ?? "unpaid",
+      createdAt: row.createdAt ?? row.created_at,
+    };
+  }
+  function normalizeOrderItemRow(row: Record<string, unknown>) {
+    return {
+      id: row.id,
+      orderId: row.orderId ?? row.order_id,
+      productId: row.productId ?? row.product_id,
+      variantId: row.variantId ?? row.variant_id,
+      quantity: row.quantity,
+      priceAtTime: row.priceAtTime ?? row.price_at_time,
+      productName: row.productName,
+      size: row.size,
+    };
+  }
+
   // Storefront orders (back-office: list, detail, update payment)
   app.get("/api/orders", async (req, res) => {
     try {
       const orders = await storage.getOrders();
-      res.json(orders);
+      res.json(orders.map((o) => normalizeOrderRow(o as Record<string, unknown>)));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
@@ -492,7 +540,11 @@ export async function registerRoutes(
     try {
       const order = await storage.getOrderWithDetails(req.params.id);
       if (!order) return res.status(404).json({ error: "Order not found" });
-      res.json(order);
+      const raw = order as Record<string, unknown>;
+      const items = Array.isArray(raw.items)
+        ? (raw.items as Record<string, unknown>[]).map(normalizeOrderItemRow)
+        : [];
+      res.json({ ...normalizeOrderRow(raw), items });
     } catch (error) {
       console.error("Error fetching order:", error);
       res.status(500).json({ error: "Failed to fetch order" });
@@ -503,7 +555,13 @@ export async function registerRoutes(
     try {
       const body = updatePaymentSchema.parse(req.body);
       const order = await storage.updateOrderPayment(req.params.id, body.additionalAmount);
-      res.json(order);
+      // Ensure camelCase for frontend (pg can return snake_case)
+      const raw = order as Record<string, unknown>;
+      res.json({
+        ...order,
+        paidAmount: raw.paidAmount ?? raw.paid_amount ?? "0",
+        paymentStatus: raw.paymentStatus ?? raw.payment_status ?? "unpaid",
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });

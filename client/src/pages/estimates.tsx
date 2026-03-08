@@ -30,6 +30,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, FileText, Trash2, Search, Download, Eye, EyeOff } from "lucide-react";
+import { PageBanner } from "@/components/page-banner";
 import type { EstimateWithDetails, Client, ProductWithVariants } from "@shared/schema";
 
 type ProductCategory = { id: string; slug: string; name: string };
@@ -241,6 +242,11 @@ export default function Estimates() {
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      <PageBanner
+        breadcrumb="Backoffice"
+        title="Devis"
+        subtitle="Créez des estimations avec marge cachée"
+      />
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
         <div className="relative flex-1 w-full min-w-0 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
@@ -506,19 +512,19 @@ export default function Estimates() {
       {filteredEstimates && filteredEstimates.length > 0 ? (
         <div className="space-y-3">
           {filteredEstimates.map((estimate) => (
-            <Card key={estimate.id} className="hover-elevate" data-testid={`row-estimate-${estimate.id}`}>
+            <Card key={estimate.id} className="hover-elevate transition-shadow hover:shadow-md" data-testid={`row-estimate-${estimate.id}`}>
               <CardContent className="flex items-center justify-between py-4">
                 <div className="flex items-center gap-4">
-                  <div className="h-12 w-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-                    <FileText className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                  <div className="h-12 w-12 rounded-full bg-gold/10 flex items-center justify-center border border-gold/20 shrink-0">
+                    <FileText className="h-5 w-5 text-gold dark:text-amber-400" />
                   </div>
                   <div>
-                    <h3 className="font-semibold">
+                    <h3 className="font-display font-medium">
                       {estimate.client?.name || "Non assigné"}
                     </h3>
                     <p className="text-sm text-muted-foreground">
                       {format(new Date(estimate.createdAt), "d MMM yyyy", { locale: fr })}
-                      {" • "}
+                      {" · "}
                       {estimate.items.length} article{estimate.items.length > 1 ? "s" : ""}
                     </p>
                   </div>
@@ -526,7 +532,7 @@ export default function Estimates() {
                 <div className="flex items-center gap-4">
                   {getStatusBadge(estimate.status)}
                   <div className="text-right">
-                    <p className="font-bold text-lg">{estimate.totalClientPrice.toFixed(0)}€</p>
+                    <p className="font-bold text-lg text-primary">{estimate.totalClientPrice.toFixed(0)} €</p>
                     <p className="text-xs text-green-600 dark:text-green-400">
                       +{estimate.totalCommission.toFixed(0)}€ marge
                     </p>
@@ -536,6 +542,7 @@ export default function Estimates() {
                     variant="ghost"
                     onClick={() => exportExcel(estimate.id)}
                     title="Exporter Excel"
+                    className="hover:text-primary"
                     data-testid={`button-export-${estimate.id}`}
                   >
                     <Download className="h-4 w-4" />

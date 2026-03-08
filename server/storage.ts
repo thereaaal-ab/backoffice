@@ -89,6 +89,10 @@ export interface IStorage {
   getOrders(): Promise<Order[]>;
   getOrderWithDetails(id: string): Promise<OrderWithDetails | undefined>;
   updateOrderPayment(id: string, additionalPaidAmount: number): Promise<Order>;
+  getStorefrontClients(): Promise<import("@shared/schema").StorefrontClientSummary[]>;
+
+  // Backoffice client detail
+  getClientSales(clientId: string): Promise<import("@shared/schema").SaleWithDetails[]>;
 
   // Dashboard
   getDashboardStats(): Promise<{
@@ -97,6 +101,10 @@ export interface IStorage {
     totalClients: number;
     totalSales: number;
     totalRevenue: number;
+    amountCollected: number;
+    amountToCollect: number;
+    salesWithBalance: number;
+    averageBasket: number;
     pendingEstimates: number;
     recentSales: Array<{ id: string; clientName: string; amount: string; date: string }>;
     lowStockProducts: Array<{ id: string; name: string; totalStock: number }>;
@@ -504,18 +512,105 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  // Dashboard
+  async getStorefrontClients(): Promise<import("@shared/schema").StorefrontClientSummary[]> {
+    const allOrders = await this.getOrders();
+    const map = new Map<string, Order[]>();
+    for (const o of allOrders) {
+      const raw = o as Record<string, unknown>;
+      const phone = ((raw.phone ?? "") as string).trim();
+      const email = ((raw.email ?? "") as string).trim();
+      const name = ((raw.firstName ?? raw.first_name ?? "") as string).trim();
+      const key = phone || email || name;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(o);
+    }
+    return Array.from(map.entries()).map(([key, clientOrders]) => {
+      const first = clientOrders[0] as Record<string, unknown>;
+      const name = ((first.firstName ?? first.first_name ?? "") as string).trim();
+      const phone = ((first.phone ?? "") as string).trim() || null;
+      const email = ((first.email ?? "") as string).trim() || null;
+      const totalSpent = clientOrders.reduce((s, o) => {
+        const r = o as Record<string, unknown>;
+        return s + Number(r.totalAmount ?? r.total_amount ?? 0);
+      }, 0);
+      const paidAmount = clientOrders.reduce((s, o) => {
+        const r = o as Record<string, unknown>;
+        return s + Number(r.paidAmount ?? r.paid_amount ?? 0);
+      }, 0);
+      return {
+        id: `sc_${encodeURIComponent(key)}`,
+        name,
+        phone,
+        email,
+        source: "storefront" as const,
+        orderCount: clientOrders.length,
+        totalSpent,
+        paidAmount,
+        toCollect: totalSpent - paidAmount,
+        orders: clientOrders,
+      };
+    });
+  }
+
+  async getClientSales(clientId: string): Promise<import("@shared/schema").SaleWithDetails[]> {
+    const allSales = await db
+      .select()
+      .from(sales)
+      .where(eq(sales.clientId, clientId))
+      .orderBy(desc(sales.createdAt));
+    if (!allSales.length) return [];
+    const allSaleItems = await db.select().from(saleItems).where(
+      sql`${saleItems.saleId} IN (${sql.join(allSales.map(s => sql`${s.id}`), sql`, `)})`
+    );
+    const allVariants = await db.select().from(productVariants);
+    const allProducts = await db.select().from(products);
+    const [clientRow] = await db.select().from(clients).where(eq(clients.id, clientId));
+    return allSales.map(sale => {
+      const items = allSaleItems
+        .filter(item => item.saleId === sale.id)
+        .map(item => {
+          const variant = allVariants.find(v => v.id === item.productVariantId)!;
+          const product = allProducts.find(p => p.id === variant?.productId)!;
+          return { ...item, variant: { ...variant, product } };
+        });
+      return {
+        ...sale,
+        client: clientRow ?? null,
+        items,
+        paidAmount: sale.paidAmount || "0",
+        paymentStatus: sale.paymentStatus || "paid",
+        remainingAmount: Number(sale.totalAmount) - Number(sale.paidAmount || 0),
+      };
+    });
+  }
+
+  // Dashboard (sales + storefront orders)
   async getDashboardStats() {
     const allProducts = await this.getProducts();
     const allClients = await db.select().from(clients);
     const allSales = await this.getSales();
+    const allOrders = await this.getOrders();
     const allEstimates = await this.getEstimates();
     
+    const allStorefrontClients = await this.getStorefrontClients();
     const totalProducts = allProducts.length;
     const totalStock = allProducts.reduce((sum, p) => sum + p.totalStock, 0);
-    const totalClients = allClients.length;
+    const totalClients = allClients.length + allStorefrontClients.length;
     const totalSales = allSales.length;
-    const totalRevenue = allSales.reduce((sum, s) => sum + Number(s.totalAmount), 0);
+    const salesRevenue = allSales.reduce((sum, s) => sum + Number(s.totalAmount), 0);
+    const salesCollected = allSales.reduce((sum, s) => sum + Number(s.paidAmount ?? 0), 0);
+    const orderTotal = (o: Order) => Number((o as Record<string, unknown>).totalAmount ?? (o as Record<string, unknown>).total_amount ?? 0);
+    const orderPaid = (o: Order) => Number((o as Record<string, unknown>).paidAmount ?? (o as Record<string, unknown>).paid_amount ?? 0);
+    const ordersRevenue = allOrders.reduce((sum, o) => sum + orderTotal(o), 0);
+    const ordersCollected = allOrders.reduce((sum, o) => sum + orderPaid(o), 0);
+    const totalRevenue = salesRevenue + ordersRevenue;
+    const amountCollected = salesCollected + ordersCollected;
+    const amountToCollect = totalRevenue - amountCollected;
+    const salesWithBalance = allSales.filter(s => Number(s.paidAmount ?? 0) < Number(s.totalAmount)).length;
+    const ordersWithBalance = allOrders.filter(o => orderPaid(o) < orderTotal(o)).length;
+    const totalWithBalance = salesWithBalance + ordersWithBalance;
+    const totalTransactions = totalSales + allOrders.length;
+    const averageBasket = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
     const pendingEstimates = allEstimates.filter(e => e.status === "draft" || e.status === "sent").length;
     
     const recentSales = allSales.slice(0, 5).map(sale => ({
@@ -540,6 +635,10 @@ export class DatabaseStorage implements IStorage {
       totalClients,
       totalSales,
       totalRevenue,
+      amountCollected,
+      amountToCollect,
+      salesWithBalance: totalWithBalance,
+      averageBasket,
       pendingEstimates,
       recentSales,
       lowStockProducts,
@@ -547,4 +646,58 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-export const storage = new DatabaseStorage();
+class NullStorage implements IStorage {
+  private warn() { console.warn("⚠️  NullStorage: DATABASE_URL not set — returning empty data"); }
+  async getUser() { return undefined; }
+  async getUserByUsername() { return undefined; }
+  async createUser(u: InsertUser): Promise<User> { this.warn(); return { ...u, id: "0", createdAt: new Date() } as User; }
+  async getCategories() { return []; }
+  async createCategory(c: InsertCategory): Promise<ProductCategory> { this.warn(); return { ...c, id: "0" } as ProductCategory; }
+  async getProducts() { return []; }
+  async getProduct() { return undefined; }
+  async createProduct(p: InsertProduct): Promise<Product> { this.warn(); return { ...p, id: "0", createdAt: new Date() } as unknown as Product; }
+  async updateProduct(_id: string, p: Partial<InsertProduct>): Promise<Product> { this.warn(); return { ...p, id: _id } as unknown as Product; }
+  async deleteProduct() { this.warn(); }
+  async getVariant() { return undefined; }
+  async updateVariantStock() { this.warn(); }
+  async getClients() { return []; }
+  async getClient() { return undefined; }
+  async createClient(c: InsertClient): Promise<Client> { this.warn(); return { ...c, id: "0", createdAt: new Date() } as Client; }
+  async updateClient(_id: string, c: Partial<InsertClient>): Promise<Client> { this.warn(); return { ...c, id: _id } as unknown as Client; }
+  async deleteClient() { this.warn(); }
+  async getSales() { return []; }
+  async getSale() { return undefined; }
+  async createSale(s: InsertSale): Promise<Sale> { this.warn(); return { ...s, id: "0", createdAt: new Date() } as unknown as Sale; }
+  async updateSalePayment(_id: string): Promise<Sale> { this.warn(); return {} as Sale; }
+  async deleteSale() { this.warn(); }
+  async getEstimates() { return []; }
+  async getEstimate() { return undefined; }
+  async createEstimate(e: InsertEstimate): Promise<Estimate> { this.warn(); return { ...e, id: "0", createdAt: new Date() } as unknown as Estimate; }
+  async updateEstimateStatus(_id: string): Promise<Estimate> { this.warn(); return {} as Estimate; }
+  async deleteEstimate() { this.warn(); }
+  async getOrders() { return []; }
+  async getOrderWithDetails() { return undefined; }
+  async updateOrderPayment(_id: string): Promise<Order> { this.warn(); return {} as Order; }
+  async getStorefrontClients() { this.warn(); return []; }
+  async getClientSales() { this.warn(); return []; }
+  async getDashboardStats() {
+    return {
+      totalProducts: 0,
+      totalStock: 0,
+      totalClients: 0,
+      totalSales: 0,
+      totalRevenue: 0,
+      amountCollected: 0,
+      amountToCollect: 0,
+      salesWithBalance: 0,
+      averageBasket: 0,
+      pendingEstimates: 0,
+      recentSales: [],
+      lowStockProducts: [],
+    };
+  }
+}
+
+export const storage = process.env.DATABASE_URL
+  ? new DatabaseStorage()
+  : new NullStorage();

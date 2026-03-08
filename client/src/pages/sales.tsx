@@ -29,6 +29,7 @@ import {
   CreditCard,
   Trash2
 } from "lucide-react";
+import { PageBanner } from "@/components/page-banner";
 import type { SaleWithDetails, ProductWithVariants } from "@shared/schema";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -308,6 +309,11 @@ export default function Sales() {
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      <PageBanner
+        breadcrumb="Backoffice"
+        title="Ventes"
+        subtitle="Enregistrez une vente ou consultez l'historique"
+      />
       {/* Header with cart button and toggle */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
@@ -383,7 +389,10 @@ export default function Sales() {
                   
                   return (
                     <div key={category}>
-                      <h2 className="text-lg font-semibold mb-6">{categoryLabels[category] || category}</h2>
+                      <div className="flex items-center gap-4 mb-6">
+                        <p className="text-xs uppercase tracking-widest text-muted-foreground">{categoryLabels[category] || category}</p>
+                        <div className="flex-1 h-px bg-gold/30" />
+                      </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                         {visibleProducts.map((product) => (
                           <Card key={product.id} className="overflow-hidden flex flex-col" data-testid={`card-product-${product.id}`}>
@@ -417,11 +426,12 @@ export default function Sales() {
                               </div>
                             </div>
                             {/* Body: name, price · stock, size buttons */}
-                            <CardContent className="flex flex-1 flex-col p-5">
-                              <h3 className="font-semibold text-lg leading-tight">{product.name}</h3>
-                              <p className="text-sm text-muted-foreground mt-2 flex-1">
-                                {Number(product.defaultPrice).toFixed(2)} € · {product.totalStock} en stock
-                              </p>
+                            <CardContent className="flex flex-1 flex-col p-4">
+                              <h3 className="font-display font-medium text-base leading-tight">{product.name}</h3>
+                              <div className="flex items-baseline gap-2 mt-2 flex-1">
+                                <span className="text-lg font-semibold text-primary">{Number(product.defaultPrice).toFixed(2)} €</span>
+                                <span className="text-xs text-muted-foreground">{product.totalStock} en stock</span>
+                              </div>
                               <div className="flex flex-wrap gap-2 mt-4 pt-2">
                                 {product.variants.map((variant) => {
                                   const inCart = cart.find(c => c.variantId === variant.id);
@@ -511,7 +521,7 @@ export default function Sales() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0">
                     {getPaymentStatusBadge(sale.paymentStatus, sale.remainingAmount)}
-                    <p className="font-bold text-lg min-w-[70px] text-right">
+                    <p className="font-bold text-lg min-w-[70px] text-right text-primary">
                       {Number(sale.totalAmount).toFixed(0)}€
                     </p>
                     {sale.paymentStatus !== "paid" && (
@@ -616,9 +626,9 @@ export default function Sales() {
             </div>
 
             {/* Total */}
-            <div className="flex justify-between items-center py-3 border-t border-b">
-              <span className="font-semibold">Total</span>
-              <span className="text-2xl font-bold">{cartTotal.toFixed(0)}€</span>
+            <div className="flex justify-between items-center py-3 border-t border-b border-gold/20">
+              <span className="text-xs uppercase tracking-widest text-muted-foreground">Total</span>
+              <span className="text-2xl font-display font-medium text-primary">{cartTotal.toFixed(0)} €</span>
             </div>
 
             {/* Customer Name */}
