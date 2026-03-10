@@ -43,9 +43,9 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
       return;
     }
     fetch("/api/auth/me", { credentials: "include" })
-      .then((res) => {
-        if (res.ok) setAuthStatus("authenticated");
-        else setAuthStatus("unauthenticated");
+      .then((res) => res.ok ? res.json() : { user: null })
+      .then((data) => {
+        setAuthStatus(data?.user ? "authenticated" : "unauthenticated");
       })
       .catch(() => setAuthStatus("unauthenticated"));
   }, [location]);

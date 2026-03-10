@@ -97,11 +97,11 @@ export async function registerRoutes(
   app.get("/api/auth/me", async (req, res) => {
     const userId = (req.session as { userId?: string })?.userId;
     if (!userId) {
-      return res.status(401).json({ error: "Non authentifié" });
+      return res.status(200).json({ user: null });
     }
     const user = await storage.getUser(userId);
     if (!user) {
-      return res.status(401).json({ error: "Session invalide" });
+      return res.status(200).json({ user: null });
     }
     res.json({ user: { id: user.id, username: user.username } as AuthUser });
   });
