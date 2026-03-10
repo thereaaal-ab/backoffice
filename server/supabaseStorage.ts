@@ -9,8 +9,8 @@ import path from "path";
 const BUCKET = "product-images";
 
 function getSupabase() {
-  const url = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = (process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL)?.trim();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !key) return null;
   return createClient(url, key, { auth: { persistSession: false } });
 }
@@ -59,6 +59,9 @@ export async function uploadToSupabaseStorage(
   });
   if (error) {
     console.error("[supabaseStorage] upload error:", error.message);
+    if (error.message?.toLowerCase().includes("signature verification")) {
+      console.error("[supabaseStorage] Hint: Check SUPABASE_SERVICE_ROLE_KEY in .env (no spaces/newlines, correct project). Use Dashboard → Settings → API → service_role.");
+    }
     return null;
   }
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(filePath);

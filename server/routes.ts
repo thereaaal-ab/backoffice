@@ -4,11 +4,12 @@ import fs from "fs";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import { storage } from "./storage";
-import { insertProductSchema, insertClientSchema, insertCategorySchema } from "@shared/schema";
+import { insertProductSchema, insertClientSchema, insertCategorySchema, insertMainCategorySchema } from "@shared/schema";
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { uploadToSupabaseStorage, isSupabaseStorageConfigured } from "./supabaseStorage";
+import { requireAuth, verifyPassword, type AuthUser } from "./auth";
 
 const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
@@ -68,6 +69,59 @@ export async function registerRoutes(
   // Static serving for legacy /uploads/ paths (e.g. old product images before Supabase)
   app.use("/uploads", express.static(uploadsDir));
 
+  // ─── Auth (no requireAuth) ─────────────────────────────────────────────────
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const { username, password } = req.body as { username?: string; password?: string };
+      if (!username?.trim() || !password) {
+        return res.status(400).json({ error: "Identifiant et mot de passe requis" });
+      }
+      const user = await storage.getUserByUsername(username.trim());
+      if (!user) {
+        return res.status(401).json({ error: "Identifiant ou mot de passe incorrect" });
+      }
+      const valid = await verifyPassword(password, user.password);
+      if (!valid) {
+        return res.status(401).json({ error: "Identifiant ou mot de passe incorrect" });
+      }
+      (req.session as { userId?: string; username?: string }).userId = user.id;
+      (req.session as { userId?: string; username?: string }).username = user.username;
+      const authUser: AuthUser = { id: user.id, username: user.username };
+      res.json({ user: authUser });
+    } catch (err) {
+      console.error("[POST /api/auth/login]", err);
+      res.status(500).json({ error: "Erreur de connexion" });
+    }
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    const userId = (req.session as { userId?: string })?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Non authentifié" });
+    }
+    const user = await storage.getUser(userId);
+    if (!user) {
+      return res.status(401).json({ error: "Session invalide" });
+    }
+    res.json({ user: { id: user.id, username: user.username } as AuthUser });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        console.error("[POST /api/auth/logout]", err);
+        return res.status(500).json({ error: "Erreur lors de la déconnexion" });
+      }
+      res.json({ ok: true });
+    });
+  });
+
+  // Protect all other /api routes (except auth and static)
+  app.use("/api", (req, res, next) => {
+    if (req.path.startsWith("/auth")) return next();
+    requireAuth(req, res, next);
+  });
+
   // Upload to Supabase Storage (product images); returns public URL as objectPath
   app.post("/api/uploads", upload.single("file"), async (req, res) => {
     if (!req.file) {
@@ -95,6 +149,99 @@ export async function registerRoutes(
         contentType: req.file.mimetype,
       },
     });
+  });
+
+  // Main categories (Homme, Femme, Enfant – dynamic, no code change to add more)
+  app.get("/api/main-categories", async (req, res) => {
+    try {
+      const list = await storage.getMainCategories();
+      res.json(list);
+    } catch (error) {
+      console.error("Error fetching main categories:", error);
+      res.status(500).json({ error: "Failed to fetch main categories" });
+    }
+  });
+
+  app.post("/api/main-categories", async (req, res) => {
+    try {
+      const raw = { ...req.body };
+      if (raw.label && typeof raw.label === "string" && (!raw.slug || String(raw.slug).trim() === "")) {
+        raw.slug = raw.label
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/\p{Diacritic}/gu, "")
+          .replace(/\s+/g, "-")
+          .replace(/[^a-z0-9-]/g, "")
+          .replace(/-+/g, "-")
+          .replace(/^-|-$/g, "") || "main-" + Date.now();
+      }
+      const payload: Record<string, unknown> = {
+        label: raw.label,
+        slug: raw.slug,
+        position: raw.position ?? 0,
+      };
+      if (raw.imageUrl != null && String(raw.imageUrl).trim() !== "") {
+        payload.imageUrl = String(raw.imageUrl).trim();
+      }
+      let body = insertMainCategorySchema.parse(payload);
+      let created;
+      try {
+        created = await storage.createMainCategory(body);
+      } catch (createErr) {
+        const errMsg = (createErr as Error).message ?? "";
+        if (errMsg.includes("main_categories_slug_unique") && payload.slug) {
+          payload.slug = String(payload.slug) + "-" + Date.now().toString(36).slice(-6);
+          body = insertMainCategorySchema.parse(payload);
+          created = await storage.createMainCategory(body);
+        } else {
+          throw createErr;
+        }
+      }
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const message = error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ");
+        return res.status(400).json({ error: message });
+      }
+      const err = error as Error;
+      console.error("Error creating main category:", err.message, err);
+      const safeMessage = err.message && !err.message.includes("password") ? err.message : "Failed to create main category";
+      res.status(500).json({ error: safeMessage });
+    }
+  });
+
+  app.patch("/api/main-categories/:id", async (req, res) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const update: { label?: string; slug?: string; position?: number; imageUrl?: string | null } = {};
+      if (typeof body.label === "string" && body.label.trim()) update.label = body.label.trim();
+      if (typeof body.slug === "string") update.slug = body.slug.trim() || undefined;
+      if (typeof body.position === "number") update.position = body.position;
+      if (body.imageUrl !== undefined) update.imageUrl = body.imageUrl === null || body.imageUrl === "" ? null : String(body.imageUrl);
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ error: "Aucune donnée à mettre à jour" });
+      }
+      const mainCategory = await storage.updateMainCategory(req.params.id, update);
+      res.json(mainCategory);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Main category not found") return res.status(404).json({ error: message });
+      console.error("Error updating main category:", error);
+      res.status(500).json({ error: "Erreur lors de la mise à jour" });
+    }
+  });
+
+  app.delete("/api/main-categories/:id", async (req, res) => {
+    try {
+      await storage.deleteMainCategory(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Main category not found") return res.status(404).json({ error: message });
+      if (message.includes("utilisée par des produits")) return res.status(409).json({ error: message });
+      console.error("Error deleting main category:", error);
+      res.status(500).json({ error: "Impossible de supprimer la catégorie principale" });
+    }
   });
 
   // Categories
@@ -154,6 +301,38 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/categories/:id", async (req, res) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const update: { name?: string; slug?: string } = {};
+      if (typeof body.name === "string" && body.name.trim()) update.name = body.name.trim();
+      if (typeof body.slug === "string") update.slug = body.slug.trim() || undefined;
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ error: "Aucune donnée à mettre à jour" });
+      }
+      const category = await storage.updateCategory(req.params.id, update);
+      res.json(category);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Category not found") return res.status(404).json({ error: message });
+      console.error("Error updating category:", error);
+      res.status(500).json({ error: "Erreur lors de la mise à jour" });
+    }
+  });
+
+  app.delete("/api/categories/:id", async (req, res) => {
+    try {
+      await storage.deleteCategory(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Category not found") return res.status(404).json({ error: message });
+      if (message.includes("utilisée par des produits")) return res.status(409).json({ error: message });
+      console.error("Error deleting category:", error);
+      res.status(500).json({ error: "Impossible de supprimer la catégorie" });
+    }
+  });
+
   // Dashboard
   app.get("/api/dashboard/stats", async (req, res) => {
     try {
@@ -193,8 +372,8 @@ export async function registerRoutes(
     try {
       const { variants, imageUrls, ...productData } = req.body;
       // Normalize: mainCategory (accept client camelCase or snake_case, default to homme)
-      const mainCat = productData.mainCategory ?? productData.main_category ?? "homme";
-      productData.mainCategory = ["homme", "femme", "enfant"].includes(mainCat) ? mainCat : "homme";
+      const mainCat = (productData.mainCategory ?? productData.main_category ?? "homme").trim();
+      productData.mainCategory = mainCat || "homme";
       if (productData.main_category !== undefined) delete productData.main_category;
       // Coerce defaultPrice, empty imageUrl to undefined
       if (productData.defaultPrice != null) {
@@ -561,6 +740,21 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/orders/:orderId/items/:itemId", async (req, res) => {
+    try {
+      const { orderId, itemId } = req.params;
+      await storage.deleteOrderItem(orderId, itemId);
+      res.status(204).send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Order item not found") {
+        return res.status(404).json({ error: message });
+      }
+      console.error("[DELETE /api/orders/:orderId/items/:itemId]", error);
+      res.status(500).json({ error: "Impossible de supprimer l'article" });
+    }
+  });
+
   app.patch("/api/orders/:id/payment", async (req, res) => {
     try {
       const body = updatePaymentSchema.parse(req.body);
@@ -578,6 +772,20 @@ export async function registerRoutes(
       }
       console.error("Error updating order payment:", error);
       res.status(500).json({ error: "Failed to update payment" });
+    }
+  });
+
+  app.delete("/api/orders/:id", async (req, res) => {
+    try {
+      await storage.deleteOrder(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Order not found") {
+        return res.status(404).json({ error: message });
+      }
+      console.error("[DELETE /api/orders/:id]", error);
+      res.status(500).json({ error: "Impossible de supprimer la commande" });
     }
   });
 

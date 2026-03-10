@@ -1,6 +1,7 @@
 import { db } from "./db";
-import { productCategories, products, productVariants, clients, sales, saleItems, estimates, estimateItems } from "@shared/schema";
+import { users, mainCategories, productCategories, products, productVariants, clients, sales, saleItems, estimates, estimateItems } from "@shared/schema";
 import { sql } from "drizzle-orm";
+import { hashPassword } from "./auth";
 
 const clothingSizes = ["XS", "S", "M", "L", "XL", "XXL"];
 const shoeSizes = ["36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46"];
@@ -17,6 +18,31 @@ export async function seedDatabase() {
     return;
   }
   try {
+    // Ensure at least one admin user exists (password stored hashed only)
+    const existingUsers = await db.select().from(users).limit(1);
+    if (existingUsers.length === 0) {
+      const username = process.env.SEED_ADMIN_USERNAME || "admin";
+      const plainPassword = process.env.SEED_ADMIN_PASSWORD || "admin";
+      const hashedPassword = await hashPassword(plainPassword);
+      await db.insert(users).values({ username, password: hashedPassword });
+      console.log(`Created default user "${username}". Change the password after first login.`);
+    }
+
+    // Always ensure default main categories exist (Homme, Femme, Enfant)
+    const defaultMainCategories = [
+      { slug: "homme", label: "Homme", position: 0 },
+      { slug: "femme", label: "Femme", position: 1 },
+      { slug: "enfant", label: "Enfant", position: 2 },
+    ];
+    const existingMain = await db.select().from(mainCategories);
+    const existingMainSlugs = new Set(existingMain.map((c) => c.slug));
+    for (const cat of defaultMainCategories) {
+      if (!existingMainSlugs.has(cat.slug)) {
+        await db.insert(mainCategories).values(cat);
+        existingMainSlugs.add(cat.slug);
+      }
+    }
+
     // Always ensure default categories exist
     const existingCategories = await db.select().from(productCategories);
     const existingSlugs = new Set(existingCategories.map((c) => c.slug));

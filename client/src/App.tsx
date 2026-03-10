@@ -1,4 +1,5 @@
-import { Switch, Route, useLocation } from "wouter";
+import { useState, useEffect } from "react";
+import { Switch, Route, useLocation, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -6,8 +7,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { AppDock } from "@/components/app-dock";
-import { Package } from "lucide-react";
+import { Package, LogOut } from "lucide-react";
 import { Link } from "wouter";
+import { Button } from "@/components/ui/button";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import Stock from "@/pages/stock";
@@ -15,6 +17,7 @@ import Clients from "@/pages/clients";
 import Sales from "@/pages/sales";
 import Estimates from "@/pages/estimates";
 import Orders from "@/pages/orders";
+import Login from "@/pages/login";
 
 function Router() {
   return (
@@ -28,6 +31,39 @@ function Router() {
       <Route component={NotFound} />
     </Switch>
   );
+}
+
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const [location] = useLocation();
+  const [authStatus, setAuthStatus] = useState<"loading" | "authenticated" | "unauthenticated">("loading");
+
+  useEffect(() => {
+    if (location === "/login") {
+      setAuthStatus("unauthenticated");
+      return;
+    }
+    fetch("/api/auth/me", { credentials: "include" })
+      .then((res) => {
+        if (res.ok) setAuthStatus("authenticated");
+        else setAuthStatus("unauthenticated");
+      })
+      .catch(() => setAuthStatus("unauthenticated"));
+  }, [location]);
+
+  if (location === "/login") {
+    return <Login />;
+  }
+  if (authStatus === "loading") {
+    return (
+      <div className="min-h-dvh flex items-center justify-center">
+        <div className="animate-pulse text-muted-foreground">Chargement...</div>
+      </div>
+    );
+  }
+  if (authStatus === "unauthenticated") {
+    return <Redirect to="/login" />;
+  }
+  return <>{children}</>;
 }
 
 const pageTitles: Record<string, string> = {
@@ -58,6 +94,19 @@ function AppLayout() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <ThemeToggle />
+          <form
+            action="/api/auth/logout"
+            method="post"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+              window.location.href = "/login";
+            }}
+          >
+            <Button type="submit" variant="ghost" size="icon" title="Déconnexion">
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </form>
         </div>
       </header>
       <main className="flex-1 overflow-auto min-h-0 pb-24">
@@ -75,7 +124,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="light" storageKey="stockpro-theme">
         <TooltipProvider>
-          <AppLayout />
+          <AuthGuard>
+            <AppLayout />
+          </AuthGuard>
           <Toaster />
         </TooltipProvider>
       </ThemeProvider>

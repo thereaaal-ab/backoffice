@@ -33,13 +33,26 @@ export type ProductCategory = typeof productCategories.$inferSelect;
 export const categoryEnum = ["vetement", "chaussures", "autre"] as const;
 export type Category = typeof categoryEnum[number];
 
+// Main categories (dynamic: Homme, Femme, Enfant, etc.) – stored in DB, used in nav/filters
+export const mainCategories = pgTable("main_categories", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  label: text("label").notNull(),
+  position: integer("position").notNull().default(0),
+  imageUrl: text("image_url"),
+});
+
+export const insertMainCategorySchema = createInsertSchema(mainCategories).omit({ id: true });
+export type InsertMainCategory = z.infer<typeof insertMainCategorySchema>;
+export type MainCategoryRow = typeof mainCategories.$inferSelect;
+
+// Fallback enum for validation when no DB (backward compat)
+export const mainCategoryEnum = ["homme", "femme", "enfant"] as const;
+export type MainCategory = (typeof mainCategoryEnum)[number];
+
 // Size types
 export const clothingSizes = ["XS", "S", "M", "L", "XL", "XXL"] as const;
 export const shoeSizes = ["36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46"] as const;
-
-// Main category for shop sections (Homme / Femme / Enfant)
-export const mainCategoryEnum = ["homme", "femme", "enfant"] as const;
-export type MainCategory = (typeof mainCategoryEnum)[number];
 
 // Products table
 export const products = pgTable("products", {
@@ -60,7 +73,7 @@ export const productColorOptions = ["Noir", "Blanc", "Bleu", "Rouge", "Vert", "G
 export const insertProductSchema = createInsertSchema(products)
   .omit({ id: true, createdAt: true })
   .extend({
-    mainCategory: z.enum(mainCategoryEnum),
+    mainCategory: z.string().min(1),
     defaultPrice: z.union([z.string(), z.number()]).transform((v) =>
       typeof v === "number" ? String(v) : String(Number(v))
     ),

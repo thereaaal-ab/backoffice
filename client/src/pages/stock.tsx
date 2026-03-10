@@ -23,10 +23,10 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Package, Minus, Search, ImageIcon, Filter, Upload, X, Loader2, MoreVertical, Pencil, Trash2, FolderPlus } from "lucide-react";
+import { Plus, Package, Minus, Search, ImageIcon, Filter, Upload, X, Loader2, MoreVertical, Pencil, Trash2, FolderPlus, Settings2 } from "lucide-react";
 import { PageBanner } from "@/components/page-banner";
 import type { ProductWithVariants } from "@shared/schema";
-import { productColorOptions, mainCategoryEnum } from "@shared/schema";
+import { productColorOptions } from "@shared/schema";
 import { useForm } from "react-hook-form";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { z } from "zod";
@@ -59,15 +59,9 @@ const allSizes = [...clothingSizes, ...shoeSizes, OTHER_CATEGORY_SIZE];
 /** Sentinel for "no color" – Radix Select disallows value="" on SelectItem */
 const COLOR_NONE = "__none__";
 
-const MAIN_CATEGORY_LABELS: Record<(typeof mainCategoryEnum)[number], string> = {
-  homme: "Homme",
-  femme: "Femme",
-  enfant: "Enfant",
-};
-
 const productFormSchema = z.object({
   name: z.string().min(1, "Le nom est requis"),
-  mainCategory: z.enum(mainCategoryEnum, { required_error: "La catégorie principale est requise" }),
+  mainCategory: z.string().min(1, "La catégorie principale est requise"),
   category: z.string().min(1, "La catégorie est requise"),
   color: z.string().optional(),
   defaultPrice: z.string().min(1, "Le prix est requis"),
@@ -78,6 +72,7 @@ const productFormSchema = z.object({
 type ProductFormValues = z.infer<typeof productFormSchema>;
 
 type ProductCategory = { id: string; slug: string; name: string };
+type MainCategory = { id: string; slug: string; label: string; position: number; imageUrl?: string | null };
 
 function getCategoryLabel(slug: string, categories?: ProductCategory[]) {
   const cat = categories?.find((c) => c.slug === slug);
@@ -95,8 +90,20 @@ export default function Stock() {
   const [selectedColor, setSelectedColor] = useState<string>("all");
   const [selectedSize, setSelectedSize] = useState<string>("all");
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [categoryDialogType, setCategoryDialogType] = useState<"product" | "main">("product");
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategorySlug, setNewCategorySlug] = useState("");
+  const [newMainCategoryImageUrl, setNewMainCategoryImageUrl] = useState<string | null>(null);
+  const mainCategoryUploadRef = useRef<HTMLInputElement>(null);
+  const [manageCategoriesOpen, setManageCategoriesOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<ProductCategory | null>(null);
+  const [editingMainCategory, setEditingMainCategory] = useState<MainCategory | null>(null);
+  const [categoryToDelete, setCategoryToDelete] = useState<ProductCategory | null>(null);
+  const [mainCategoryToDelete, setMainCategoryToDelete] = useState<MainCategory | null>(null);
+  const [editCategoryName, setEditCategoryName] = useState("");
+  const [editCategorySlug, setEditCategorySlug] = useState("");
+  const [editMainLabel, setEditMainLabel] = useState("");
+  const [editMainSlug, setEditMainSlug] = useState("");
   const [variantQuantities, setVariantQuantities] = useState<Record<string, number>>({});
   const MAX_PRODUCT_IMAGES = 6;
   const [uploadedImagePaths, setUploadedImagePaths] = useState<(string | null)[]>(() => Array(MAX_PRODUCT_IMAGES).fill(null));
@@ -136,6 +143,37 @@ export default function Stock() {
     queryKey: ["/api/categories"],
   });
 
+  const { data: mainCategoriesList = [], refetch: refetchMainCategories } = useQuery<MainCategory[]>({
+    queryKey: ["/api/main-categories"],
+  });
+
+  const createMainCategoryMutation = useMutation({
+    mutationFn: async (data: { label: string; slug?: string; position?: number; imageUrl?: string | null }) => {
+      const res = await fetch("/api/main-categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Erreur lors de la création");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchMainCategories();
+      setCategoryDialogOpen(false);
+      setNewCategoryName("");
+      setNewCategorySlug("");
+      setNewMainCategoryImageUrl(null);
+      toast({ title: "Catégorie principale ajoutée" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erreur", description: err.message, variant: "destructive" });
+    },
+  });
+
   const createCategoryMutation = useMutation({
     mutationFn: async (data: { name: string; slug: string }) => {
       const res = await fetch("/api/categories", {
@@ -154,6 +192,7 @@ export default function Stock() {
       setCategoryDialogOpen(false);
       setNewCategoryName("");
       setNewCategorySlug("");
+      setNewMainCategoryImageUrl(null);
       toast({
         title: "Catégorie créée",
         description: "La catégorie a été ajoutée avec succès",
@@ -168,12 +207,108 @@ export default function Stock() {
     },
   });
 
+  const updateCategoryMutation = useMutation({
+    mutationFn: async ({ id, name, slug }: { id: string; name?: string; slug?: string }) => {
+      const res = await fetch(`/api/categories/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, slug }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Erreur lors de la mise à jour");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchCategories();
+      setEditingCategory(null);
+      toast({ title: "Catégorie mise à jour" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erreur", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteCategoryMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/categories/${id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Impossible de supprimer");
+      }
+    },
+    onSuccess: () => {
+      refetchCategories();
+      setCategoryToDelete(null);
+      toast({ title: "Catégorie supprimée" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erreur", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateMainCategoryMutation = useMutation({
+    mutationFn: async ({ id, label, slug }: { id: string; label?: string; slug?: string }) => {
+      const res = await fetch(`/api/main-categories/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, slug }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Erreur lors de la mise à jour");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchMainCategories();
+      setEditingMainCategory(null);
+      toast({ title: "Catégorie principale mise à jour" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erreur", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMainCategoryMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/main-categories/${id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Impossible de supprimer");
+      }
+    },
+    onSuccess: () => {
+      refetchMainCategories();
+      setMainCategoryToDelete(null);
+      toast({
+        title: "Catégorie principale supprimée",
+        description: "Elle ne sera plus affichée sur la boutique (même base de données).",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erreur", description: err.message, variant: "destructive" });
+    },
+  });
+
   const handleCreateCategory = (e: React.FormEvent) => {
     e.preventDefault();
-    const name = newCategoryName.trim();
-    if (!name) return;
-    const slug = newCategorySlug.trim() || name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-    createCategoryMutation.mutate({ name, slug });
+    const nameOrLabel = newCategoryName.trim();
+    if (!nameOrLabel) return;
+    const slug = newCategorySlug.trim() || nameOrLabel.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (categoryDialogType === "main") {
+      createMainCategoryMutation.mutate({
+        label: nameOrLabel,
+        slug: slug || undefined,
+        position: mainCategoriesList.length,
+        imageUrl: newMainCategoryImageUrl || undefined,
+      });
+    } else {
+      createCategoryMutation.mutate({ name: nameOrLabel, slug });
+    }
   };
 
   const createProductMutation = useMutation({
@@ -334,7 +469,7 @@ export default function Stock() {
       const mainCat = (editingProduct as { mainCategory?: string }).mainCategory ?? "homme";
       form.reset({
         name: editingProduct.name,
-        mainCategory: mainCat as "homme" | "femme" | "enfant",
+        mainCategory: mainCat,
         category,
         color: (editingProduct as { color?: string | null }).color ?? "",
         defaultPrice: String(Number(editingProduct.defaultPrice)),
@@ -434,6 +569,15 @@ export default function Stock() {
               type="button"
               variant="outline"
               className="min-h-10 gap-2"
+              onClick={() => setManageCategoriesOpen(true)}
+            >
+              <Settings2 className="h-4 w-4" />
+              Gérer les catégories
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-10 gap-2"
               onClick={() => setCategoryDialogOpen(true)}
             >
               <FolderPlus className="h-4 w-4" />
@@ -487,9 +631,16 @@ export default function Stock() {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {mainCategoryEnum.map((value) => (
-                              <SelectItem key={value} value={value}>{MAIN_CATEGORY_LABELS[value]}</SelectItem>
+                            {mainCategoriesList.map((mc) => (
+                              <SelectItem key={mc.id} value={mc.slug}>{mc.label}</SelectItem>
                             ))}
+                            {mainCategoriesList.length === 0 && (
+                              <>
+                                <SelectItem value="homme">Homme</SelectItem>
+                                <SelectItem value="femme">Femme</SelectItem>
+                                <SelectItem value="enfant">Enfant</SelectItem>
+                              </>
+                            )}
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -688,44 +839,353 @@ export default function Stock() {
             </DialogContent>
           </Dialog>
 
-          {/* Nouvelle catégorie dialog */}
-          <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
+          {/* Nouvelle catégorie (produit ou principale) */}
+          <Dialog open={categoryDialogOpen} onOpenChange={(open) => {
+            setCategoryDialogOpen(open);
+            if (!open) {
+              setNewCategoryName("");
+              setNewCategorySlug("");
+              setNewMainCategoryImageUrl(null);
+            }
+          }}>
             <DialogContent className="max-w-sm">
               <DialogHeader>
                 <DialogTitle>Nouvelle catégorie</DialogTitle>
-                <DialogDescription>Créez une catégorie pour vos produits</DialogDescription>
+                <DialogDescription>
+                  Catégorie produit (ex. Vêtements, Chaussures) ou catégorie principale (ex. Homme, Femme, Enfant) affichée sur la boutique.
+                </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleCreateCategory} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="cat-name">Nom</Label>
+                  <Label>Type</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={categoryDialogType === "product" ? "default" : "outline"}
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setCategoryDialogType("product")}
+                    >
+                      Catégorie produit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={categoryDialogType === "main" ? "default" : "outline"}
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setCategoryDialogType("main")}
+                    >
+                      Catégorie principale
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {categoryDialogType === "product"
+                      ? "Ex. Vêtements, Chaussures, Accessoires"
+                      : "Ex. Homme, Femme, Enfant — affichée en grand sur la boutique"}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="cat-name">{categoryDialogType === "main" ? "Libellé" : "Nom"}</Label>
                   <Input
                     id="cat-name"
                     value={newCategoryName}
                     onChange={(e) => setNewCategoryName(e.target.value)}
-                    placeholder="Ex: Accessoires"
+                    placeholder={categoryDialogType === "main" ? "Ex: Homme" : "Ex: Accessoires"}
                     required
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="cat-slug" className="text-muted-foreground text-xs">Slug (optionnel, généré depuis le nom si vide)</Label>
+                  <Label htmlFor="cat-slug" className="text-muted-foreground text-xs">Slug (optionnel, généré automatiquement si vide)</Label>
                   <Input
                     id="cat-slug"
                     value={newCategorySlug}
                     onChange={(e) => setNewCategorySlug(e.target.value)}
-                    placeholder="Ex: accessoires"
+                    placeholder="Ex: homme, accessoires"
                   />
                 </div>
+                {categoryDialogType === "main" && (
+                  <div className="space-y-2">
+                    <Label>Image (optionnel)</Label>
+                    <input
+                      ref={mainCategoryUploadRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const res = await uploadFile(file);
+                        if (res?.objectPath) {
+                          setNewMainCategoryImageUrl(res.objectPath);
+                          toast({ title: "Image ajoutée" });
+                        }
+                        e.target.value = "";
+                      }}
+                    />
+                    {newMainCategoryImageUrl ? (
+                      <div className="flex items-center gap-2 rounded-lg border p-2">
+                        <img src={newMainCategoryImageUrl} alt="" className="h-14 w-14 rounded object-cover" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-muted-foreground truncate">Image de la catégorie</p>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => setNewMainCategoryImageUrl(null)}
+                          >
+                            Supprimer
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-2"
+                        onClick={() => mainCategoryUploadRef.current?.click()}
+                        disabled={isUploading}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {isUploading ? "Téléchargement..." : "Choisir une image"}
+                      </Button>
+                    )}
+                  </div>
+                )}
                 <div className="flex justify-end gap-2 pt-2">
                   <Button type="button" variant="outline" onClick={() => setCategoryDialogOpen(false)}>
                     Annuler
                   </Button>
-                  <Button type="submit" disabled={createCategoryMutation.isPending}>
-                    {createCategoryMutation.isPending ? "Création..." : "Créer"}
+                  <Button
+                    type="submit"
+                    disabled={
+                      categoryDialogType === "product"
+                        ? createCategoryMutation.isPending
+                        : createMainCategoryMutation.isPending
+                    }
+                  >
+                    {categoryDialogType === "product"
+                      ? (createCategoryMutation.isPending ? "Création..." : "Créer")
+                      : (createMainCategoryMutation.isPending ? "Création..." : "Créer")}
                   </Button>
                 </div>
               </form>
             </DialogContent>
           </Dialog>
+
+          {/* Gérer les catégories */}
+          <Dialog
+            open={manageCategoriesOpen}
+            onOpenChange={(open) => {
+              setManageCategoriesOpen(open);
+              if (!open) {
+                setEditingCategory(null);
+                setEditingMainCategory(null);
+                setCategoryToDelete(null);
+                setMainCategoryToDelete(null);
+              }
+            }}
+          >
+            <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Gérer les catégories</DialogTitle>
+                <DialogDescription>
+                  Modifier ou supprimer les catégories produit et les catégories principales. Les catégories utilisées par des produits ne peuvent pas être supprimées.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-6">
+                <div>
+                  <h4 className="text-sm font-medium mb-2">Catégories produit</h4>
+                  <div className="rounded-lg border border-border/60 divide-y divide-border/40">
+                    {categories.length === 0 ? (
+                      <p className="p-3 text-sm text-muted-foreground">Aucune catégorie produit.</p>
+                    ) : (
+                      categories.map((cat) => (
+                        <div key={cat.id} className="p-3 flex flex-wrap items-center gap-2">
+                          {editingCategory?.id === cat.id ? (
+                            <>
+                              <Input
+                                className="flex-1 min-w-[100px] h-8"
+                                value={editCategoryName}
+                                onChange={(e) => setEditCategoryName(e.target.value)}
+                                placeholder="Nom"
+                              />
+                              <Input
+                                className="flex-1 min-w-[80px] h-8"
+                                value={editCategorySlug}
+                                onChange={(e) => setEditCategorySlug(e.target.value)}
+                                placeholder="Slug"
+                              />
+                              <Button
+                                size="sm"
+                                className="h-8"
+                                onClick={() => {
+                                  updateCategoryMutation.mutate({
+                                    id: cat.id,
+                                    name: editCategoryName.trim() || undefined,
+                                    slug: editCategorySlug.trim() || undefined,
+                                  });
+                                }}
+                                disabled={updateCategoryMutation.isPending || !editCategoryName.trim()}
+                              >
+                                Enregistrer
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-8" onClick={() => setEditingCategory(null)}>
+                                Annuler
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="font-medium flex-1 min-w-0 truncate">{cat.name}</span>
+                              <span className="text-muted-foreground text-sm">{cat.slug}</span>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 shrink-0"
+                                onClick={() => {
+                                  setEditingCategory(cat);
+                                  setEditCategoryName(cat.name);
+                                  setEditCategorySlug(cat.slug);
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+                                onClick={() => setCategoryToDelete(cat)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium mb-2">Catégories principales</h4>
+                  <div className="rounded-lg border border-border/60 divide-y divide-border/40">
+                    {mainCategoriesList.length === 0 ? (
+                      <p className="p-3 text-sm text-muted-foreground">Aucune catégorie principale.</p>
+                    ) : (
+                      mainCategoriesList.map((mc) => (
+                        <div key={mc.id} className="p-3 flex flex-wrap items-center gap-2">
+                          {editingMainCategory?.id === mc.id ? (
+                            <>
+                              <Input
+                                className="flex-1 min-w-[100px] h-8"
+                                value={editMainLabel}
+                                onChange={(e) => setEditMainLabel(e.target.value)}
+                                placeholder="Libellé"
+                              />
+                              <Input
+                                className="flex-1 min-w-[80px] h-8"
+                                value={editMainSlug}
+                                onChange={(e) => setEditMainSlug(e.target.value)}
+                                placeholder="Slug"
+                              />
+                              <Button
+                                size="sm"
+                                className="h-8"
+                                onClick={() => {
+                                  updateMainCategoryMutation.mutate({
+                                    id: mc.id,
+                                    label: editMainLabel.trim() || undefined,
+                                    slug: editMainSlug.trim() || undefined,
+                                  });
+                                }}
+                                disabled={updateMainCategoryMutation.isPending || !editMainLabel.trim()}
+                              >
+                                Enregistrer
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-8" onClick={() => setEditingMainCategory(null)}>
+                                Annuler
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="font-medium flex-1 min-w-0 truncate">{mc.label}</span>
+                              <span className="text-muted-foreground text-sm">{mc.slug}</span>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 shrink-0"
+                                onClick={() => {
+                                  setEditingMainCategory(mc);
+                                  setEditMainLabel(mc.label);
+                                  setEditMainSlug(mc.slug);
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+                                onClick={() => setMainCategoryToDelete(mc)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Confirm delete category */}
+          <AlertDialog open={!!categoryToDelete} onOpenChange={(open) => !open && setCategoryToDelete(null)}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Supprimer cette catégorie ?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {categoryToDelete
+                    ? `« ${categoryToDelete.name} » sera supprimée. Impossible si des produits utilisent cette catégorie.`
+                    : ""}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Annuler</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={() => categoryToDelete && deleteCategoryMutation.mutate(categoryToDelete.id)}
+                  disabled={deleteCategoryMutation.isPending}
+                >
+                  {deleteCategoryMutation.isPending ? "Suppression..." : "Supprimer"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <AlertDialog open={!!mainCategoryToDelete} onOpenChange={(open) => !open && setMainCategoryToDelete(null)}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Supprimer cette catégorie principale ?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {mainCategoryToDelete
+                    ? `« ${mainCategoryToDelete.label} » sera supprimée et n'apparaîtra plus sur la boutique. Impossible si des produits l'utilisent.`
+                    : ""}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Annuler</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={() => mainCategoryToDelete && deleteMainCategoryMutation.mutate(mainCategoryToDelete.id)}
+                  disabled={deleteMainCategoryMutation.isPending}
+                >
+                  {deleteMainCategoryMutation.isPending ? "Suppression..." : "Supprimer"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           </div>
         </div>
       </div>
@@ -813,9 +1273,16 @@ export default function Stock() {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {mainCategoryEnum.map((value) => (
-                              <SelectItem key={value} value={value}>{MAIN_CATEGORY_LABELS[value]}</SelectItem>
+                            {mainCategoriesList.map((mc) => (
+                              <SelectItem key={mc.id} value={mc.slug}>{mc.label}</SelectItem>
                             ))}
+                            {mainCategoriesList.length === 0 && (
+                              <>
+                                <SelectItem value="homme">Homme</SelectItem>
+                                <SelectItem value="femme">Femme</SelectItem>
+                                <SelectItem value="enfant">Enfant</SelectItem>
+                              </>
+                            )}
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -966,7 +1433,7 @@ export default function Stock() {
                     <dl className="space-y-2 text-sm">
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">Catégorie principale</dt>
-                        <dd className="font-medium">{MAIN_CATEGORY_LABELS[(detailProduct as { mainCategory?: string }).mainCategory as keyof typeof MAIN_CATEGORY_LABELS] ?? (detailProduct as { mainCategory?: string }).mainCategory}</dd>
+                        <dd className="font-medium">{mainCategoriesList.find((mc) => mc.slug === (detailProduct as { mainCategory?: string }).mainCategory)?.label ?? (detailProduct as { mainCategory?: string }).mainCategory}</dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">Catégorie</dt>

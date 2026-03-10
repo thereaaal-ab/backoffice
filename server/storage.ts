@@ -2,6 +2,7 @@ import { db } from "./db";
 import { eq, desc, sql, and } from "drizzle-orm";
 import {
   users,
+  mainCategories,
   productCategories,
   products,
   productVariants,
@@ -16,6 +17,8 @@ import {
   orderItems,
   type User,
   type InsertUser,
+  type MainCategoryRow,
+  type InsertMainCategory,
   type ProductCategory,
   type InsertCategory,
   type Product,
@@ -52,6 +55,12 @@ export interface IStorage {
   // Categories
   getCategories(): Promise<ProductCategory[]>;
   createCategory(category: InsertCategory): Promise<ProductCategory>;
+  updateCategory(id: string, data: Partial<InsertCategory>): Promise<ProductCategory>;
+  deleteCategory(id: string): Promise<void>;
+  getMainCategories(): Promise<MainCategoryRow[]>;
+  createMainCategory(category: InsertMainCategory): Promise<MainCategoryRow>;
+  updateMainCategory(id: string, data: Partial<InsertMainCategory>): Promise<MainCategoryRow>;
+  deleteMainCategory(id: string): Promise<void>;
 
   // Products
   getProducts(): Promise<ProductWithVariants[]>;
@@ -89,6 +98,8 @@ export interface IStorage {
   getOrders(): Promise<Order[]>;
   getOrderWithDetails(id: string): Promise<OrderWithDetails | undefined>;
   updateOrderPayment(id: string, additionalPaidAmount: number): Promise<Order>;
+  deleteOrder(id: string): Promise<void>;
+  deleteOrderItem(orderId: string, itemId: string): Promise<void>;
   getStorefrontClients(): Promise<import("@shared/schema").StorefrontClientSummary[]>;
 
   // Backoffice client detail
@@ -139,6 +150,56 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Category insert did not return a row");
     }
     return created;
+  }
+
+  async updateCategory(id: string, data: Partial<InsertCategory>): Promise<ProductCategory> {
+    const [updated] = await db
+      .update(productCategories)
+      .set(data as Record<string, unknown>)
+      .where(eq(productCategories.id, id))
+      .returning();
+    if (!updated) throw new Error("Category not found");
+    return updated;
+  }
+
+  async deleteCategory(id: string): Promise<void> {
+    const [cat] = await db.select().from(productCategories).where(eq(productCategories.id, id));
+    if (!cat) throw new Error("Category not found");
+    const used = await db.select({ id: products.id }).from(products).where(eq(products.category, cat.slug)).limit(1);
+    if (used.length > 0) {
+      throw new Error("Cette catégorie est utilisée par des produits. Modifiez ou supprimez ces produits avant de supprimer la catégorie.");
+    }
+    await db.delete(productCategories).where(eq(productCategories.id, id));
+  }
+
+  async getMainCategories(): Promise<MainCategoryRow[]> {
+    return db.select().from(mainCategories).orderBy(mainCategories.position, mainCategories.slug);
+  }
+
+  async createMainCategory(category: InsertMainCategory): Promise<MainCategoryRow> {
+    const [created] = await db.insert(mainCategories).values(category).returning();
+    if (!created) throw new Error("Main category insert did not return a row");
+    return created;
+  }
+
+  async updateMainCategory(id: string, data: Partial<InsertMainCategory>): Promise<MainCategoryRow> {
+    const [updated] = await db
+      .update(mainCategories)
+      .set(data as Record<string, unknown>)
+      .where(eq(mainCategories.id, id))
+      .returning();
+    if (!updated) throw new Error("Main category not found");
+    return updated;
+  }
+
+  async deleteMainCategory(id: string): Promise<void> {
+    const [mc] = await db.select().from(mainCategories).where(eq(mainCategories.id, id));
+    if (!mc) throw new Error("Main category not found");
+    const used = await db.select({ id: products.id }).from(products).where(eq(products.mainCategory, mc.slug)).limit(1);
+    if (used.length > 0) {
+      throw new Error("Cette catégorie principale est utilisée par des produits. Modifiez ces produits avant de supprimer la catégorie.");
+    }
+    await db.delete(mainCategories).where(eq(mainCategories.id, id));
   }
 
   // Products
@@ -228,16 +289,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteProduct(id: string): Promise<void> {
-    const referencedByOrders = await db
-      .select({ id: orderItems.id })
-      .from(orderItems)
-      .where(eq(orderItems.productId, id))
-      .limit(1);
-    if (referencedByOrders.length > 0) {
-      throw new Error(
-        "Ce produit ne peut pas être supprimé : il figure dans au moins une commande."
-      );
-    }
+    await db.delete(orderItems).where(eq(orderItems.productId, id));
     await db.delete(productImages).where(eq(productImages.productId, id));
     await db.delete(productVariants).where(eq(productVariants.productId, id));
     await db.delete(products).where(eq(products.id, id));
@@ -512,6 +564,54 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deleteOrder(id: string): Promise<void> {
+    const [order] = await db.select().from(orders).where(eq(orders.id, id));
+    if (!order) throw new Error("Order not found");
+    const items = await db.select().from(orderItems).where(eq(orderItems.orderId, id));
+    for (const item of items) {
+      if (item.variantId) {
+        const [variant] = await db.select().from(productVariants).where(eq(productVariants.id, item.variantId));
+        if (variant) {
+          const newQty = Math.max(0, variant.quantity + item.quantity);
+          await db.update(productVariants).set({ quantity: newQty }).where(eq(productVariants.id, item.variantId));
+        }
+      }
+    }
+    await db.delete(orderItems).where(eq(orderItems.orderId, id));
+    await db.delete(orders).where(eq(orders.id, id));
+  }
+
+  async deleteOrderItem(orderId: string, itemId: string): Promise<void> {
+    const [item] = await db.select().from(orderItems).where(eq(orderItems.id, itemId));
+    if (!item || item.orderId !== orderId) throw new Error("Order item not found");
+    if (item.variantId) {
+      const [variant] = await db.select().from(productVariants).where(eq(productVariants.id, item.variantId));
+      if (variant) {
+        const newQty = Math.max(0, variant.quantity + item.quantity);
+        await db.update(productVariants).set({ quantity: newQty }).where(eq(productVariants.id, item.variantId));
+      }
+    }
+    await db.delete(orderItems).where(eq(orderItems.id, itemId));
+    const remaining = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+    const newTotal = remaining.reduce(
+      (sum, i) => sum + Number(i.priceAtTime) * i.quantity,
+      0
+    );
+    const [order] = await db.select().from(orders).where(eq(orders.id, orderId));
+    if (!order) return;
+    const currentPaid = Number(order.paidAmount);
+    const newPaid = Math.min(currentPaid, newTotal);
+    const paymentStatus = newTotal <= 0 ? "unpaid" : newPaid >= newTotal ? "paid" : newPaid > 0 ? "partial" : "unpaid";
+    await db
+      .update(orders)
+      .set({
+        totalAmount: String(newTotal.toFixed(2)),
+        paidAmount: String(newPaid.toFixed(2)),
+        paymentStatus,
+      })
+      .where(eq(orders.id, orderId));
+  }
+
   async getStorefrontClients(): Promise<import("@shared/schema").StorefrontClientSummary[]> {
     const allOrders = await this.getOrders();
     const map = new Map<string, Order[]>();
@@ -653,6 +753,12 @@ class NullStorage implements IStorage {
   async createUser(u: InsertUser): Promise<User> { this.warn(); return { ...u, id: "0", createdAt: new Date() } as User; }
   async getCategories() { return []; }
   async createCategory(c: InsertCategory): Promise<ProductCategory> { this.warn(); return { ...c, id: "0" } as ProductCategory; }
+  async updateCategory() { this.warn(); return {} as ProductCategory; }
+  async deleteCategory() { this.warn(); }
+  async getMainCategories(): Promise<MainCategoryRow[]> { return []; }
+  async createMainCategory(c: InsertMainCategory): Promise<MainCategoryRow> { this.warn(); return { ...c, id: "0", position: 0 } as MainCategoryRow; }
+  async updateMainCategory() { this.warn(); return {} as MainCategoryRow; }
+  async deleteMainCategory() { this.warn(); }
   async getProducts() { return []; }
   async getProduct() { return undefined; }
   async createProduct(p: InsertProduct): Promise<Product> { this.warn(); return { ...p, id: "0", createdAt: new Date() } as unknown as Product; }
@@ -678,6 +784,8 @@ class NullStorage implements IStorage {
   async getOrders() { return []; }
   async getOrderWithDetails() { return undefined; }
   async updateOrderPayment(_id: string): Promise<Order> { this.warn(); return {} as Order; }
+  async deleteOrder() { this.warn(); }
+  async deleteOrderItem() { this.warn(); }
   async getStorefrontClients() { this.warn(); return []; }
   async getClientSales() { this.warn(); return []; }
   async getDashboardStats() {

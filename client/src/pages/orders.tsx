@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -21,7 +31,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { ShoppingBag, Search, CreditCard, Phone, Mail, User, Calendar } from "lucide-react";
+import { ShoppingBag, Search, Phone, Mail, User, Calendar, Trash2 } from "lucide-react";
 import { PageBanner } from "@/components/page-banner";
 import type { Order, OrderWithDetails } from "@shared/schema";
 import { format } from "date-fns";
@@ -31,40 +41,69 @@ export default function Orders() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [detailOrder, setDetailOrder] = useState<OrderWithDetails | null>(null);
-  const [additionalPayment, setAdditionalPayment] = useState("");
+  const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<{ orderId: string; itemId: string } | null>(null);
 
   const { data: orders, isLoading } = useQuery<Order[]>({
     queryKey: ["/api/orders"],
     refetchOnWindowFocus: true,
   });
 
-  const updatePaymentMutation = useMutation({
-    mutationFn: async ({ orderId, additionalAmount }: { orderId: string; additionalAmount: number }) => {
-      const res = await apiRequest("PATCH", `/api/orders/${orderId}/payment`, { additionalAmount });
-      return res.json() as Promise<Record<string, unknown>>;
+  const deleteOrderMutation = useMutation({
+    mutationFn: async (orderId: string) => {
+      const res = await fetch(`/api/orders/${orderId}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Erreur lors de la suppression");
+      }
     },
-    onSuccess: (updatedOrder) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-      setAdditionalPayment("");
-      // Normalize: API may return camelCase or snake_case; ensure modal shows new "Déjà payé" / "Reste à payer"
-      const paid = updatedOrder.paidAmount ?? updatedOrder.paid_amount ?? 0;
-      const status = (updatedOrder.paymentStatus ?? updatedOrder.payment_status ?? "unpaid") as string;
-      const paidAmount = typeof paid === "number" ? String(paid) : String(Number(paid) || 0);
-      setDetailOrder((prev) =>
-        prev
-          ? { ...prev, paidAmount, paymentStatus: status }
-          : null
-      );
+      setDetailOrder(null);
+      setOrderToDelete(null);
       toast({
-        title: "Paiement enregistré",
-        description: "Le paiement a été ajouté à la commande",
+        title: "Commande supprimée",
+        description: "La commande a été supprimée et le stock a été rétabli.",
       });
     },
-    onError: () => {
+    onError: (err: Error) => {
       toast({
         title: "Erreur",
-        description: "Impossible d'enregistrer le paiement",
+        description: err.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteOrderItemMutation = useMutation({
+    mutationFn: async ({ orderId, itemId }: { orderId: string; itemId: string }) => {
+      const res = await fetch(`/api/orders/${orderId}/items/${itemId}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Erreur lors de la suppression");
+      }
+    },
+    onSuccess: async (_, { orderId }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      setItemToDelete(null);
+      const res = await fetch(`/api/orders/${orderId}`, { credentials: "include" });
+      if (res.ok) {
+        const data: OrderWithDetails = await res.json();
+        setDetailOrder(data);
+      } else {
+        setDetailOrder(null);
+      }
+      toast({
+        title: "Article supprimé",
+        description: "L'article a été retiré de la commande et le stock a été rétabli.",
+      });
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Erreur",
+        description: err.message,
         variant: "destructive",
       });
     },
@@ -76,7 +115,6 @@ export default function Orders() {
       if (!res.ok) throw new Error();
       const data: OrderWithDetails = await res.json();
       setDetailOrder(data);
-      setAdditionalPayment("");
     } catch {
       toast({
         title: "Erreur",
@@ -297,6 +335,7 @@ export default function Orders() {
                           <TableHead className="text-center w-14 text-muted-foreground">Qté</TableHead>
                           <TableHead className="text-right text-muted-foreground">Prix unit.</TableHead>
                           <TableHead className="text-right font-medium">Total</TableHead>
+                          <TableHead className="w-10" />
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -308,6 +347,19 @@ export default function Orders() {
                             <TableCell className="text-right text-muted-foreground">{Number(item.priceAtTime).toFixed(2)} €</TableCell>
                             <TableCell className="text-right font-medium text-primary">
                               {(Number(item.priceAtTime) * item.quantity).toFixed(2)} €
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => setItemToDelete({ orderId: detailOrder.id, itemId: item.id })}
+                                disabled={deleteOrderItemMutation.isPending}
+                                title="Supprimer cet article"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -334,51 +386,68 @@ export default function Orders() {
                   )}
                 </div>
 
-                {/* Payment form */}
-                {Number(detailOrder.totalAmount ?? 0) - Number(detailOrder.paidAmount ?? 0) > 0 && (
-                  <div className="pt-4 border-t border-border/60 space-y-3">
-                    <label className="text-xs uppercase tracking-widest text-muted-foreground flex items-center gap-2">
-                      <CreditCard className="h-4 w-4" />
-                      Enregistrer un paiement
-                    </label>
-                    <div className="flex gap-2">
-                      <Input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        placeholder="Montant (€)"
-                        className="rounded-lg border-gold/20 focus:border-primary max-w-[140px]"
-                        value={additionalPayment}
-                        onChange={(e) => setAdditionalPayment(e.target.value)}
-                      />
-                      <Button
-                        className="bg-gray-900 hover:bg-primary text-xs uppercase tracking-widest"
-                        onClick={() => {
-                          const amount = parseFloat(additionalPayment);
-                          if (isNaN(amount) || amount <= 0) {
-                            toast({
-                              title: "Montant invalide",
-                              variant: "destructive",
-                            });
-                            return;
-                          }
-                          updatePaymentMutation.mutate({
-                            orderId: detailOrder.id,
-                            additionalAmount: amount,
-                          });
-                        }}
-                        disabled={updatePaymentMutation.isPending}
-                      >
-                        {updatePaymentMutation.isPending ? "..." : "Ajouter"}
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                {/* Delete order */}
+                <div className="pt-4 border-t border-border/60">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive"
+                    onClick={() => setOrderToDelete(detailOrder)}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Supprimer la commande
+                  </Button>
+                </div>
               </div>
             </>
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!itemToDelete} onOpenChange={(open) => !open && setItemToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer cet article de la commande ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              L'article sera retiré de la commande et le stock sera rétabli. Le total de la commande sera recalculé.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() =>
+                itemToDelete &&
+                deleteOrderItemMutation.mutate({ orderId: itemToDelete.orderId, itemId: itemToDelete.itemId })
+              }
+              disabled={deleteOrderItemMutation.isPending}
+            >
+              {deleteOrderItemMutation.isPending ? "Suppression..." : "Supprimer"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!orderToDelete} onOpenChange={(open) => !open && setOrderToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer cette commande ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              La commande sera définitivement supprimée. Le stock des articles sera rétabli. Cette action est irréversible.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => orderToDelete && deleteOrderMutation.mutate(orderToDelete.id)}
+              disabled={deleteOrderMutation.isPending}
+            >
+              {deleteOrderMutation.isPending ? "Suppression..." : "Supprimer"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
