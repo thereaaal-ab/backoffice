@@ -1,11 +1,14 @@
 /**
  * Authentication: session middleware and auth helpers.
  * Passwords are hashed with bcrypt; never stored or logged in plain text.
+ * In production, sessions are stored in PostgreSQL so login works across instances.
  */
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import { Request, Response, NextFunction } from "express";
 import bcrypt from "bcrypt";
 import type { User } from "@shared/schema";
+import { pool } from "./db";
 
 const SALT_ROUNDS = 10;
 
@@ -26,8 +29,12 @@ declare module "express-session" {
 
 const sessionSecret = process.env.SESSION_SECRET || "change-me-in-production-use-env";
 
+const pgSession = connectPgSimple(session);
+const sessionStore = pool ? new pgSession({ pool, createTableIfMissing: true }) : undefined;
+
 export const sessionMiddleware = session({
   secret: sessionSecret,
+  store: sessionStore,
   resave: false,
   saveUninitialized: false,
   name: "stockpro.sid",

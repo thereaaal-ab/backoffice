@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,7 +8,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Package } from "lucide-react";
 
 export default function Login() {
-  const [, setLocation] = useLocation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -31,8 +29,7 @@ export default function Login() {
         setError(data.error || "Connexion impossible");
         return;
       }
-      setLocation("/");
-      window.location.reload();
+      window.location.href = "/";
     } catch {
       setError("Erreur réseau");
     } finally {

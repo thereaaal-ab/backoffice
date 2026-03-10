@@ -87,7 +87,13 @@ export async function registerRoutes(
       (req.session as { userId?: string; username?: string }).userId = user.id;
       (req.session as { userId?: string; username?: string }).username = user.username;
       const authUser: AuthUser = { id: user.id, username: user.username };
-      res.json({ user: authUser });
+      req.session.save((err) => {
+        if (err) {
+          console.error("[POST /api/auth/login] session save", err);
+          return res.status(500).json({ error: "Erreur de connexion" });
+        }
+        res.json({ user: authUser });
+      });
     } catch (err) {
       console.error("[POST /api/auth/login]", err);
       res.status(500).json({ error: "Erreur de connexion" });
