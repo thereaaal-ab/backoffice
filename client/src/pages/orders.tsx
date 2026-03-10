@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { ShoppingBag, Search, Phone, Mail, User, Calendar, Trash2 } from "lucide-react";
+import { ShoppingBag, Search, Phone, Mail, User, Calendar, Trash2, CreditCard } from "lucide-react";
 import { PageBanner } from "@/components/page-banner";
 import type { Order, OrderWithDetails } from "@shared/schema";
 import { format } from "date-fns";
@@ -41,6 +41,7 @@ export default function Orders() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [detailOrder, setDetailOrder] = useState<OrderWithDetails | null>(null);
+  const [additionalPayment, setAdditionalPayment] = useState("");
   const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
   const [itemToDelete, setItemToDelete] = useState<{ orderId: string; itemId: string } | null>(null);
 
@@ -73,6 +74,39 @@ export default function Orders() {
         description: err.message,
         variant: "destructive",
       });
+    },
+  });
+
+  const updatePaymentMutation = useMutation({
+    mutationFn: async ({ orderId, additionalAmount }: { orderId: string; additionalAmount: number }) => {
+      const res = await fetch(`/api/orders/${orderId}/payment`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ additionalAmount }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Erreur lors de l'enregistrement du paiement");
+      }
+      return res.json() as Promise<{ paidAmount: string; paymentStatus: string }>;
+    },
+    onSuccess: (updatedOrder, { orderId }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      setAdditionalPayment("");
+      const paid = updatedOrder.paidAmount ?? "0";
+      const status = updatedOrder.paymentStatus ?? "unpaid";
+      setDetailOrder((prev) =>
+        prev && prev.id === orderId ? { ...prev, paidAmount: paid, paymentStatus: status } : prev
+      );
+      toast({
+        title: "Paiement enregistré",
+        description: "Le montant a été ajouté à la commande. Reste à payer mis à jour.",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erreur", description: err.message, variant: "destructive" });
     },
   });
 
@@ -115,6 +149,7 @@ export default function Orders() {
       if (!res.ok) throw new Error();
       const data: OrderWithDetails = await res.json();
       setDetailOrder(data);
+      setAdditionalPayment("");
     } catch {
       toast({
         title: "Erreur",
@@ -385,6 +420,56 @@ export default function Orders() {
                     </div>
                   )}
                 </div>
+
+                {/* Enregistrer un paiement */}
+                {Number(detailOrder.totalAmount ?? 0) - Number(detailOrder.paidAmount ?? 0) > 0 && (
+                  <div className="pt-4 border-t border-border/60 space-y-3">
+                    <label className="text-xs uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+                      <CreditCard className="h-4 w-4" />
+                      Enregistrer un paiement
+                    </label>
+                    <p className="text-sm text-muted-foreground">
+                      Saisissez le montant que le client vous a versé. « Déjà payé » et « Reste à payer » seront mis à jour.
+                    </p>
+                    <div className="flex gap-2 flex-wrap items-center">
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        placeholder="Montant (€)"
+                        className="rounded-lg border-gold/20 focus:border-primary max-w-[140px]"
+                        value={additionalPayment}
+                        onChange={(e) => setAdditionalPayment(e.target.value)}
+                      />
+                      <Button
+                        className="bg-gray-900 hover:bg-primary text-xs uppercase tracking-widest"
+                        disabled={updatePaymentMutation.isPending || !additionalPayment.trim()}
+                        onClick={() => {
+                          const amount = parseFloat(additionalPayment.replace(",", "."));
+                          if (isNaN(amount) || amount <= 0) {
+                            toast({ title: "Montant invalide", variant: "destructive" });
+                            return;
+                          }
+                          const rest = Number(detailOrder.totalAmount ?? 0) - Number(detailOrder.paidAmount ?? 0);
+                          if (amount > rest) {
+                            toast({
+                              title: "Montant trop élevé",
+                              description: `Reste à payer : ${rest.toFixed(2)} €`,
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          updatePaymentMutation.mutate({
+                            orderId: detailOrder.id,
+                            additionalAmount: amount,
+                          });
+                        }}
+                      >
+                        {updatePaymentMutation.isPending ? "Enregistrement..." : "Ajouter"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Delete order */}
                 <div className="pt-4 border-t border-border/60">
