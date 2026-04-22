@@ -1,55 +1,56 @@
-import type { IncomingMessage, ServerResponse } from "http";
+import express, { type Request, type Response, type NextFunction } from "express";
+import { createServer } from "http";
+import { sessionMiddleware } from "../server/auth";
+import { registerRoutes } from "../server/routes";
+import { seedDatabase } from "../server/seed";
 
-type VercelReq = IncomingMessage & { query?: Record<string, string | string[] | undefined>; body?: unknown };
-type VercelRes = ServerResponse;
+declare module "http" {
+  interface IncomingMessage {
+    rawBody: unknown;
+  }
+}
 
-/**
- * Proxies /api/* to BACKEND_URL when the Express server is deployed elsewhere (e.g. Railway).
- * Set BACKEND_URL in Vercel env to your backend root URL (e.g. https://your-app.railway.app).
- * If unset, returns 503 so the UI can show a clear message.
- */
-export default async function handler(req: VercelReq, res: VercelRes) {
-  const backend = process.env.BACKEND_URL;
-  if (!backend) {
-    res.statusCode = 503;
-    res.setHeader("content-type", "application/json");
-    res.end(
-      JSON.stringify({
-        error:
-          "Backend not configured. Set BACKEND_URL in Vercel to your API server URL (e.g. Railway or Render).",
-      })
-    );
-    return;
+let appInitPromise: Promise<express.Express> | null = null;
+
+async function getApp() {
+  if (!appInitPromise) {
+    appInitPromise = (async () => {
+      const app = express();
+      const httpServer = createServer(app);
+
+      // Required in serverless environments to correctly handle secure cookies.
+      app.set("trust proxy", 1);
+
+      app.use(
+        express.json({
+          verify: (req, _res, buf) => {
+            req.rawBody = buf;
+          },
+        }),
+      );
+      app.use(express.urlencoded({ extended: false }));
+      app.use(sessionMiddleware);
+
+      await registerRoutes(httpServer, app);
+      await seedDatabase();
+
+      app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+        const status = err.status || err.statusCode || 500;
+        const message = err.message || "Internal Server Error";
+
+        console.error("Internal Server Error:", err);
+        if (res.headersSent) return next(err);
+        return res.status(status).json({ message });
+      });
+
+      return app;
+    })();
   }
 
-  const path = (req.query.path as string[] | undefined) ?? [];
-  const pathSegment = path.length ? `/${path.join("/")}` : "";
-  const rest = { ...req.query };
-  delete rest.path;
-  const qs = Object.keys(rest).length ? "?" + new URLSearchParams(rest as Record<string, string>).toString() : "";
-  const targetUrl = `${backend.replace(/\/$/, "")}/api${pathSegment}${qs}`;
+  return appInitPromise;
+}
 
-  const headers: Record<string, string> = {};
-  const skip = new Set(["host", "connection", "content-length"]);
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (v != null && !skip.has(k.toLowerCase()))
-      headers[k] = Array.isArray(v) ? v[0] : String(v);
-  }
-
-  let body: string | undefined;
-  if (req.method !== "GET" && req.method !== "HEAD" && req.body != null) {
-    body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
-  }
-
-  const response = await fetch(targetUrl, {
-    method: req.method ?? "GET",
-    headers,
-    body,
-  });
-
-  res.statusCode = response.status;
-  const contentType = response.headers.get("content-type");
-  if (contentType) res.setHeader("content-type", contentType);
-  const text = await response.text();
-  res.end(text);
+export default async function handler(req: Request, res: Response) {
+  const app = await getApp();
+  return app(req, res);
 }
