@@ -805,27 +805,29 @@ export default function Stock() {
                   {category !== "autre" && (category === "vetement" || category === "chaussures") && (
                     <div className="space-y-3">
                       <Label>Quantités par taille</Label>
-                      <div className="grid grid-cols-6 gap-2">
-                        {(category === "vetement" ? clothingSizes : shoeSizes).map((size) => (
-                          <div key={size} className="space-y-1">
-                            <Label className="text-xs text-center block text-muted-foreground">{size}</Label>
-                            <Input
-                              type="number"
-                              min="0"
-                              className="text-center"
-                              value={variantQuantities[size] || ""}
-                              onChange={(e) => setVariantQuantities(prev => ({
-                                ...prev,
-                                [size]: parseInt(e.target.value) || 0
-                              }))}
-                              data-testid={`input-qty-${size}`}
-                            />
-                          </div>
-                        ))}
+                      <div className="max-h-64 overflow-y-auto rounded-lg border border-border/70 bg-muted/10 p-2">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {(category === "vetement" ? clothingSizes : shoeSizes).map((size) => (
+                            <div key={size} className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+                              <Label className="text-sm text-muted-foreground">Taille {size}</Label>
+                              <Input
+                                type="number"
+                                min="0"
+                                className="h-8 w-20 text-center"
+                                value={variantQuantities[size] || ""}
+                                onChange={(e) => setVariantQuantities(prev => ({
+                                  ...prev,
+                                  [size]: parseInt(e.target.value) || 0
+                                }))}
+                                data-testid={`input-qty-${size}`}
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   )}
-
+                  
                   <div className="flex justify-end gap-2 pt-4">
                     <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                       Annuler
